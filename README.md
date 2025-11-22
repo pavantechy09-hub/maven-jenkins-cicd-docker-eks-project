@@ -530,3 +530,84 @@ Cleaning Jenkins workspace...
 
 -----
 ---
+
+## 🧩 Build & Run with Chainguard runtime (recommended minimal runtime)
+
+The included `Dockerfile` supports building a Tomcat image using a minimal Chainguard Java runtime.
+By default the Dockerfile uses `images.chainguard.dev/java:17` as the runtime image. If you prefer a
+different runtime tag, pass `--build-arg RUNTIME_IMAGE=...`.
+
+Example build (PowerShell):
+
+```powershell
+cd 'e:\Java_project\maven-jenkins-cicd-docker-eks-project'
+docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t java-webapp:chainguard .
+docker run --rm -p 8080:8080 java-webapp:chainguard
+
+# Open http://localhost:8080
+```
+
+If `images.chainguard.dev/java:17` isn't available in your environment or you'd like to test quickly,
+you can override with another JVM-enabled image (for example a distroless Java image):
+
+```powershell
+docker build --build-arg RUNTIME_IMAGE=gcr.io/distroless/java:11 -t java-webapp:distroless .
+```
+
+Notes:
+- Chainguard/distroless images are minimal and often lack a shell; the Dockerfile runs Tomcat via the
+  Java bootstrap so the container can run without `/bin/sh`.
+- If the runtime image you pick doesn't include `java` on PATH, the container will fail to start. You can
+  always override `RUNTIME_IMAGE` with an image you control.
+
+## 🔁 CI: Build, push image and deploy to EC2 (recommended container flow)
+
+If you want Jenkins to build a Docker image and have the EC2 instance pull & run it (diagram flow), do the following:
+
+1. Configure a container registry (ECR recommended for AWS) and create a repository (e.g. `myapp`).
+2. Update Terraform variables before applying so the EC2 user-data knows which image to pull:
+
+   ```hcl
+   # terraform/terraform.tfvars
+   use_docker_deploy = true
+   docker_image_repo = "<your-account>.dkr.ecr.us-east-1.amazonaws.com/myapp"
+   docker_image_tag  = "latest"
+   ```
+
+3. Sample Jenkins pipeline steps to build and push to ECR (replace with GHCR/DockerHub commands if you use those registries):
+
+```groovy
+pipeline {
+  agent any
+  environment {
+    AWS_REGION = 'us-east-1'
+    IMAGE_REPO = '123456789012.dkr.ecr.us-east-1.amazonaws.com/myapp'
+    IMAGE_TAG  = "${env.BUILD_NUMBER}"
+  }
+  stages {
+    stage('Checkout') {
+      steps { git url: 'https://github.com/your/repo.git', branch: 'main' }
+    }
+    stage('Build') {
+      steps { sh 'mvn -B -DskipTests clean package' }
+    }
+    stage('Build & Push Docker') {
+      steps {
+        sh '''
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 123456789012.dkr.ecr.$AWS_REGION.amazonaws.com
+          docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker push ${IMAGE_REPO}:${IMAGE_TAG}
+        '''
+      }
+    }
+  }
+}
+```
+
+4. After pushing the image, Terraform-provisioned EC2 (with `use_docker_deploy=true`) will pull and run the image on boot. For rolling updates you can SSH + docker pull/run or add a small script to restart the container.
+
+Notes:
+- Make sure the EC2 instance has network access to the registry. For private ECR, assign an instance profile (IAM role) with permissions: `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` and `ec2:DescribeInstances` as needed, or have Jenkins push to a public registry.
+- Alternatively, have Jenkins SSH into the EC2 instance and run `docker pull` + `docker run` remotely if you prefer not to grant EC2 ECR permissions.
+
+
