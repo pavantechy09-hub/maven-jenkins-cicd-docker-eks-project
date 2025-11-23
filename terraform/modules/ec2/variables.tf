@@ -40,3 +40,18 @@ variable "docker_image_tag" {
   type    = string
   default = "latest"
 }
+
+variable "vpc_id" {
+  type    = string
+  default = ""
+}
+
+variable "subnet_id" {
+  type    = string
+  default = ""
+}
+
+variable "jenkins_port" {
+  type    = number
+  default = 8081
+}
