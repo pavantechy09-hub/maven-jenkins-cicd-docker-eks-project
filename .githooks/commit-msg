@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Simple commit-msg hook to validate Conventional Commits
+MSG_FILE="$1"
+MSG="$(cat "$MSG_FILE")"
+
+# regex: type(optional-scope): subject
+RE='^(feat|fix|docs|style|refactor|perf|test|chore|ci|build)(\([a-z0-9_\-]+\))?: .{1,50}'
+
+echo "Validating commit message..."
+if ! echo "$MSG" | grep -Eq "$RE"; then
+  echo "\nERROR: Commit message does not follow Conventional Commits format."
+  echo "Expected format: type(scope): short summary (<=50 chars)\nExamples: feat(ci): add PR template\n          fix(api): handle nil pointer\n"
+  exit 1
+fi
+
+exit 0
