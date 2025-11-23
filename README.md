@@ -11,10 +11,57 @@ Quick links
 - Jenkins pipeline: `Jenkinsfile`
 
 How to use (summary)
+
 1. Ensure Jenkins has a job using the `Jenkinsfile` from this repo (Pipeline: Pipeline script from SCM or multibranch pipeline).
 2. In Jenkins, add a secret-text credential with id `my-git-pattoken` that has push access to this repo so the pipeline can commit manifest updates.
-3. Make sure the EC2/Jenkins instance has the correct IAM permissions (or add AWS credentials in Jenkins) to push to ECR.
+3. Make sure the EC2/Jenkins instance has the correct IAM permissions (or add AWS credentials in Jenkins) to push to ECR. Prefer an instance profile for the EC2/Jenkins host rather than long-lived credentials.
 4. The Jenkinsfile tags images as `${BUILD_NUMBER}` and also as `latest`. The manifest in the repo will be updated to reference the build tag.
+
+Terraform notes (what changed)
+--------------------------------
+- This project now contains a Terraform module that can create the EC2 jumphost used to run Jenkins and the build tooling. The EC2 module will also create a minimal VPC, public subnet, IGW and route table when `vpc_id` / `subnet_id` are not provided.
+- Key Terraform changes you should be aware of:
+  - `terraform/modules/ec2/main.tf` now creates VPC/subnet/IGW/route table when not provided.
+  - `terraform/modules/ec2/variables.tf` adds `vpc_id`, `subnet_id` and `jenkins_port` variables (defaults: empty VPC/subnet, jenkins_port=8081).
+  - `terraform/environments/dev.tfvars` contains the environment-specific variables used in my run (do NOT commit secrets into this file).
+
+How to apply (create the jumphost)
+----------------------------------
+1. From the `terraform/` directory, initialize then apply with the environment file (example):
+
+```powershell
+cd terraform
+terraform init
+terraform apply -var-file=environments/dev.tfvars
+```
+
+2. The instance user-data will bootstrap Java, Maven, Docker, and Jenkins as described in the repo. After the EC2 instance is up you can SSH to it and run `kubectl`/`eksctl` if you installed them there.
+
+Validation steps I used (and you can repeat)
+-------------------------------------------
+1. Confirm EC2 is running and reachable (public IP printed by Terraform outputs or in the console).
+2. On the jumphost, verify Jenkins is running on the configured port (default 8081):
+  - `curl -sS http://<ec2-ip>:8081` or open in browser.
+3. Run the Jenkins pipeline job which performs:
+  - `mvn -B -DskipTests clean package` (build WAR)
+  - `docker build --build-arg RUNTIME_IMAGE=... -t ${REPOSITORY_URI}:${BUILD_NUMBER} .`
+  - `aws ecr get-login-password | docker login ... && docker push ${REPOSITORY_URI}:${BUILD_NUMBER}`
+  - update `Kubernetes-Manifests-file/deploy_svc.yml` and commit the new image tag back to the repo.
+4. On a machine with `kubectl` and the cluster kubeconfig (I used the jumphost), apply or let the manifest update trigger a deploy and check:
+  - `kubectl get deploy,svc -n default` and `kubectl rollout status deployment/java-webapp-deploy`
+  - `kubectl get svc java-webapp-svc -o wide` to get the LoadBalancer hostname.
+
+Notes about what I validated during this session
+------------------------------------------------
+- I used Terraform to create the EC2 resources and then bootstrapped Jenkins and Docker on the instance. I upgraded Maven on the host, added 2GB swap to allow Docker builds, and configured Jenkins to run the pipeline that builds and pushes an image to ECR.
+- I pushed a sample image to ECR (`demo`) and deployed it to an EKS cluster (created via `eksctl`). The EKS cluster was later deleted; the Terraform-managed EC2 infra was destroyed. The repo's README and manifest were updated to match the deployed resources while keeping no hardcoded AWS account numbers in `Jenkinsfile`.
+
+Cleanup performed
+-----------------
+- I ran `terraform destroy -var-file=environments/dev.tfvars` from the repo `terraform/` directory to destroy the Terraform-managed EC2 and networking resources.
+- I deleted the ECR repository `demo` and removed local Terraform state files from the workspace so there is no local state left behind.
+
+If you want to recreate everything, follow the "How to apply" steps above. If you want me to re-run or re-provision anything I can prepare a fresh branch and Terraform plan for review.
 
 Advanced / production-ready notes
 -------------------------------
