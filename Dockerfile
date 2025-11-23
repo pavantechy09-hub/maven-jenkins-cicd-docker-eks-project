@@ -1,3 +1,47 @@
+# Multi-stage build: Maven builder -> minimal runtime
+# Default runtime is a Chainguard Java runtime. To build with a different runtime,
+# set --build-arg RUNTIME_IMAGE=your/runtime:tag
+
+##############################
+# Stage: builder (build WAR and fetch Tomcat)
+##############################
+FROM maven:3.8.6-eclipse-temurin-11 AS builder
+
+WORKDIR /src
+COPY pom.xml ./
+COPY . ./
+
+# Build the project (produces webapp/target/webapp.war)
+RUN mvn -B -DskipTests clean package
+
+# Download Apache Tomcat so we can bundle a minimal Tomcat distribution
+ARG TOMCAT_VERSION=9.0.95
+RUN set -eux; \
+    mkdir -p /tmp/tomcat; \
+    curl -fsSL "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" -o /tmp/tomcat.tar.gz; \
+    tar -xzf /tmp/tomcat.tar.gz -C /tmp/tomcat --strip-components=1; \
+    rm /tmp/tomcat.tar.gz
+
+##############################
+# Stage: runtime (minimal, Chainguard-friendly)
+##############################
+# Use a Chainguard Java runtime by default; consumers can override with --build-arg
+ARG RUNTIME_IMAGE=images.chainguard.dev/java:17
+FROM ${RUNTIME_IMAGE} AS runtime
+
+# Create Tomcat directory and copy extracted Tomcat from builder
+COPY --from=builder /tmp/tomcat /opt/tomcat
+
+# Copy the built WAR into Tomcat webapps as ROOT.war
+COPY --from=builder /src/webapp/target/webapp.war /opt/tomcat/webapps/ROOT.war
+
+WORKDIR /opt/tomcat
+
+# Expose Tomcat port
+EXPOSE 8080
+
+# Start Tomcat by invoking the Bootstrap class directly (works with minimal runtimes)
+ENTRYPOINT ["java", "-cp", "/opt/tomcat/bin/bootstrap.jar:/opt/tomcat/bin/tomcat-juli.jar", "org.apache.catalina.startup.Bootstrap", "start"]
 #------------------------with tomcat image mavne need to be install and run goal before-------------
 # we need to install mavne and run goal make it ready war file 
 # FROM tomcat:latest
@@ -113,7 +157,53 @@ COPY . .
 RUN mvn clean package
 
 # === Stage 2: Runtime with Tomcat and Manager GUI ===
-FROM ubuntu:20.04
+##############################
+# Chainguard-friendly multi-stage Dockerfile
+#
+# This builds the Maven WAR in a builder image, downloads and extracts Tomcat in the builder,
+# and copies Tomcat + WAR into a minimal runtime image. Override RUNTIME_IMAGE at build time
+# to a Chainguard Java runtime image (one that includes a JVM). Example:
+#   docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t myapp:latest .
+##############################
+
+# === Stage 1: Build the WAR and fetch Tomcat ===
+FROM maven:3.8.6-eclipse-temurin-11 AS builder
+
+WORKDIR /src
+COPY pom.xml ./
+# Copy the full repo (multi-module); using a single copy because project is small
+COPY . ./
+
+# Build the project and produce the WAR
+RUN mvn -B -DskipTests clean package
+
+# Download and extract Tomcat into /tmp/tomcat so we can copy it into the final image
+ARG TOMCAT_VERSION=9.0.95
+RUN set -eux; \
+    mkdir -p /tmp/tomcat; \
+    curl -fsSL "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" -o /tmp/tomcat.tar.gz; \
+    tar -xzf /tmp/tomcat.tar.gz -C /tmp/tomcat --strip-components=1; \
+    rm /tmp/tomcat.tar.gz
+
+
+# === Stage 2: Minimal runtime (Chainguard runtime if provided) ===
+# RUNTIME_IMAGE should be a Chainguard Java runtime (includes a JVM). If not provided,
+# this defaults to a Chainguard Java 17 runtime. You can override at build time.
+ARG RUNTIME_IMAGE=images.chainguard.dev/java:17
+FROM ${RUNTIME_IMAGE} AS runtime
+
+# Create Tomcat directory and copy extracted Tomcat from builder
+COPY --from=builder /tmp/tomcat /opt/tomcat
+
+# Copy the built WAR from builder into Tomcat webapps as ROOT.war
+COPY --from=builder /src/webapp/target/webapp.war /opt/tomcat/webapps/ROOT.war
+
+# Expose Tomcat port
+EXPOSE 8080
+
+# Start Tomcat via the Java bootstrap so this works on minimal runtimes without a shell.
+# This invokes the internal Tomcat Bootstrap class directly.
+ENTRYPOINT ["java", "-cp", "/opt/tomcat/bin/bootstrap.jar:/opt/tomcat/bin/tomcat-juli.jar", "org.apache.catalina.startup.Bootstrap", "start"]
 
 ENV DEBIAN_FRONTEND=noninteractive
 

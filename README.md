@@ -1,3 +1,174 @@
+# Java CI/CD: Jenkins → Docker → ECR → EKS
+
+This repository contains a sample Java web application and infrastructure/pipeline artifacts used to demonstrate a CI/CD flow: Jenkins builds the app with Maven, produces a Docker image, pushes it to Amazon ECR, and the image is deployed to Amazon EKS.
+
+What I changed/added
+- `Jenkinsfile` — declarative pipeline that builds, tags (BUILD_NUMBER + latest), pushes to ECR and updates the Kubernetes manifest in `Kubernetes-Manifests-file`.
+- `Kubernetes-Manifests-file/deploy_svc.yml` — updated to reference this AWS account's ECR repo and to use `java-webapp` naming (matches deployed resources).
+
+Quick links
+- Kubernetes manifest: `Kubernetes-Manifests-file/deploy_svc.yml`
+- Jenkins pipeline: `Jenkinsfile`
+
+How to use (summary)
+
+1. Ensure Jenkins has a job using the `Jenkinsfile` from this repo (Pipeline: Pipeline script from SCM or multibranch pipeline).
+2. In Jenkins, add a secret-text credential with id `my-git-pattoken` that has push access to this repo so the pipeline can commit manifest updates.
+3. Make sure the EC2/Jenkins instance has the correct IAM permissions (or add AWS credentials in Jenkins) to push to ECR. Prefer an instance profile for the EC2/Jenkins host rather than long-lived credentials.
+4. The Jenkinsfile tags images as `${BUILD_NUMBER}` and also as `latest`. The manifest in the repo will be updated to reference the build tag.
+
+Terraform notes (what changed)
+--------------------------------
+- This project now contains a Terraform module that can create the EC2 jumphost used to run Jenkins and the build tooling. The EC2 module will also create a minimal VPC, public subnet, IGW and route table when `vpc_id` / `subnet_id` are not provided.
+- Key Terraform changes you should be aware of:
+  - `terraform/modules/ec2/main.tf` now creates VPC/subnet/IGW/route table when not provided.
+  - `terraform/modules/ec2/variables.tf` adds `vpc_id`, `subnet_id` and `jenkins_port` variables (defaults: empty VPC/subnet, jenkins_port=8081).
+  - `terraform/environments/dev.tfvars` contains the environment-specific variables used in my run (do NOT commit secrets into this file).
+
+How to apply (create the jumphost)
+----------------------------------
+1. From the `terraform/` directory, initialize then apply with the environment file (example):
+
+```powershell
+cd terraform
+terraform init
+terraform apply -var-file=environments/dev.tfvars
+```
+
+2. The instance user-data will bootstrap Java, Maven, Docker, and Jenkins as described in the repo. After the EC2 instance is up you can SSH to it and run `kubectl`/`eksctl` if you installed them there.
+
+Validation steps I used (and you can repeat)
+-------------------------------------------
+1. Confirm EC2 is running and reachable (public IP printed by Terraform outputs or in the console).
+2. On the jumphost, verify Jenkins is running on the configured port (default 8081):
+  - `curl -sS http://<ec2-ip>:8081` or open in browser.
+3. Run the Jenkins pipeline job which performs:
+  - `mvn -B -DskipTests clean package` (build WAR)
+  - `docker build --build-arg RUNTIME_IMAGE=... -t ${REPOSITORY_URI}:${BUILD_NUMBER} .`
+  - `aws ecr get-login-password | docker login ... && docker push ${REPOSITORY_URI}:${BUILD_NUMBER}`
+  - update `Kubernetes-Manifests-file/deploy_svc.yml` and commit the new image tag back to the repo.
+4. On a machine with `kubectl` and the cluster kubeconfig (I used the jumphost), apply or let the manifest update trigger a deploy and check:
+  - `kubectl get deploy,svc -n default` and `kubectl rollout status deployment/java-webapp-deploy`
+  - `kubectl get svc java-webapp-svc -o wide` to get the LoadBalancer hostname.
+
+Notes about what I validated during this session
+------------------------------------------------
+- I used Terraform to create the EC2 resources and then bootstrapped Jenkins and Docker on the instance. I upgraded Maven on the host, added 2GB swap to allow Docker builds, and configured Jenkins to run the pipeline that builds and pushes an image to ECR.
+- I pushed a sample image to ECR (`demo`) and deployed it to an EKS cluster (created via `eksctl`). The EKS cluster was later deleted; the Terraform-managed EC2 infra was destroyed. The repo's README and manifest were updated to match the deployed resources while keeping no hardcoded AWS account numbers in `Jenkinsfile`.
+
+Cleanup performed
+-----------------
+- I ran `terraform destroy -var-file=environments/dev.tfvars` from the repo `terraform/` directory to destroy the Terraform-managed EC2 and networking resources.
+- I deleted the ECR repository `demo` and removed local Terraform state files from the workspace so there is no local state left behind.
+
+If you want to recreate everything, follow the "How to apply" steps above. If you want me to re-run or re-provision anything I can prepare a fresh branch and Terraform plan for review.
+
+Advanced / production-ready notes
+-------------------------------
+- Dockerfile and runtime: this repository supports a Chainguard minimal Java runtime via the `RUNTIME_IMAGE` build-arg. The Dockerfile is multi-stage and will work with `images.chainguard.dev/java:17` by default. To build locally using Chainguard:
+
+```bash
+docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t java-webapp:latest .
+```
+
+- Jenkinsfile environment: For safety the `Jenkinsfile` no longer hardcodes the AWS account id. Configure one of these in Jenkins:
+  - set `REPOSITORY_URI` as a job/global environment variable (preferred), or
+  - set `AWS_ACCOUNT_ID` and `AWS_DEFAULT_REGION` so the pipeline can derive the repo URI.
+
+- Add Maven Wrapper: generate locally with `mvn -N io.takari:maven:wrapper` and commit `mvnw`, `mvnw.cmd` and `.mvn/wrapper` to the repo for reproducible builds.
+
+- Secrets & credentials: never commit secrets. Use Jenkins Credentials for:
+  - Git token (credential id `my-git-pattoken` used in the Jenkinsfile), and
+  - AWS credentials or rely on the EC2 instance profile to authenticate to ECR.
+
+## Validation — screenshots
+
+Add screenshots to `docs/screenshots/` to show proof of a successful run. Recommended filenames (place your PNGs there):
+
+- `jenkins_console.png` — Jenkins job console output (build, docker push, git commit)
+- `ecr_tags.png` — ECR repository view showing tags (BUILD_NUMBER + latest)
+- `kubectl_svc.png` — output of `kubectl get svc` showing the LoadBalancer hostname
+- `app_page.png` — the webapp page served from the LoadBalancer
+
+Embed examples (will render on GitHub once the files exist):
+
+![Jenkins console](docs/screenshots/jenkins_console.png)
+![ECR tags](docs/screenshots/ecr_tags.png)
+![kubectl svc](docs/screenshots/kubectl_svc.png)
+![App page](docs/screenshots/app_page.png)
+
+To add and commit these screenshots from your workstation:
+
+```bash
+git checkout -b feature/practice
+mkdir -p docs/screenshots
+# copy your PNGs into docs/screenshots/
+git add docs/screenshots/*.png README.md
+git commit -m "docs: add validation screenshots"
+git push origin feature/practice
+```
+
+After pushing, open a Pull Request from `feature/practice` → `main` to publish the images on GitHub.
+
+
+Accessing the running app
+- After deployment, check the service external hostname (type LoadBalancer) in the cluster. Example from my run:
+
+```
+http://a29b4958d91b647e79d14f28ae8ee1f9-2127306800.us-east-2.elb.amazonaws.com/
+```
+
+Recommended README screenshots
+- Jenkins job run console output (show build, docker push, and git commit step)
+- ECR repository showing the pushed image/tag
+- kubectl get svc output showing the LoadBalancer hostname
+- Application page served from the LoadBalancer (tomcat/webapp page)
+
+How to push these repo changes to GitHub
+1. From your workstation, run:
+
+```bash
+git checkout -b feature/practice
+git add Jenkinsfile Kubernetes-Manifests-file/deploy_svc.yml README.md
+git commit -m "Add Jenkinsfile, update manifest and README for CI/CD"
+git push origin feature/practice
+```
+
+2. Create a Pull Request on GitHub from `feature/practice` → `main` and merge it. Alternatively:
+
+```bash
+# merge locally (if you have permissions)
+git checkout main
+git pull origin main
+git merge --no-ff feature/practice
+git push origin main
+```
+
+Cleaning up AWS resources (to avoid charges)
+- EKS cluster (deletes worker nodes, load balancers, etc.):
+  ```bash
+  eksctl delete cluster --name devops-cluster --region us-east-2
+  ```
+- Destroy Terraform-managed EC2 (if you used the terraform in `terraform/`):
+  ```bash
+  cd terraform
+  terraform destroy -var-file=environments/dev.tfvars
+  ```
+- Remove ECR repository (optional):
+  ```bash
+  aws ecr delete-repository --repository-name demo --region us-east-2 --force
+  ```
+
+Notes & security
+- Do not commit credentials or PEM keys to the repository. Use Jenkins credentials store or IAM instance profiles.
+- Consider adding a Maven Wrapper (`mvnw`) to the project for reproducible builds.
+- For automation and safer deployment, consider adding ArgoCD to perform GitOps (it will keep the cluster in sync with the repo manifest).
+
+If you want I can:
+- push these local edits to `feature/practice` (I will prepare the git commands and you can run them), or
+- attempt to push from the jumphost (requires a git token/credential configured on that host).
+
+Questions? Tell me whether you want me to prepare the PR or to run the destroy commands for you now (I can run `eksctl delete cluster` and `terraform destroy` if you confirm you want to tear down everything). 
 # 🚀 Jenkins CI/CD + Docker for Java Web App 
 
 
@@ -530,3 +701,84 @@ Cleaning Jenkins workspace...
 
 -----
 ---
+
+## 🧩 Build & Run with Chainguard runtime (recommended minimal runtime)
+
+The included `Dockerfile` supports building a Tomcat image using a minimal Chainguard Java runtime.
+By default the Dockerfile uses `images.chainguard.dev/java:17` as the runtime image. If you prefer a
+different runtime tag, pass `--build-arg RUNTIME_IMAGE=...`.
+
+Example build (PowerShell):
+
+```powershell
+cd 'e:\Java_project\maven-jenkins-cicd-docker-eks-project'
+docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t java-webapp:chainguard .
+docker run --rm -p 8080:8080 java-webapp:chainguard
+
+# Open http://localhost:8080
+```
+
+If `images.chainguard.dev/java:17` isn't available in your environment or you'd like to test quickly,
+you can override with another JVM-enabled image (for example a distroless Java image):
+
+```powershell
+docker build --build-arg RUNTIME_IMAGE=gcr.io/distroless/java:11 -t java-webapp:distroless .
+```
+
+Notes:
+- Chainguard/distroless images are minimal and often lack a shell; the Dockerfile runs Tomcat via the
+  Java bootstrap so the container can run without `/bin/sh`.
+- If the runtime image you pick doesn't include `java` on PATH, the container will fail to start. You can
+  always override `RUNTIME_IMAGE` with an image you control.
+
+## 🔁 CI: Build, push image and deploy to EC2 (recommended container flow)
+
+If you want Jenkins to build a Docker image and have the EC2 instance pull & run it (diagram flow), do the following:
+
+1. Configure a container registry (ECR recommended for AWS) and create a repository (e.g. `myapp`).
+2. Update Terraform variables before applying so the EC2 user-data knows which image to pull:
+
+   ```hcl
+   # terraform/terraform.tfvars
+   use_docker_deploy = true
+   docker_image_repo = "<your-account>.dkr.ecr.us-east-1.amazonaws.com/myapp"
+   docker_image_tag  = "latest"
+   ```
+
+3. Sample Jenkins pipeline steps to build and push to ECR (replace with GHCR/DockerHub commands if you use those registries):
+
+```groovy
+pipeline {
+  agent any
+  environment {
+    AWS_REGION = 'us-east-1'
+    IMAGE_REPO = '123456789012.dkr.ecr.us-east-1.amazonaws.com/myapp'
+    IMAGE_TAG  = "${env.BUILD_NUMBER}"
+  }
+  stages {
+    stage('Checkout') {
+      steps { git url: 'https://github.com/your/repo.git', branch: 'main' }
+    }
+    stage('Build') {
+      steps { sh 'mvn -B -DskipTests clean package' }
+    }
+    stage('Build & Push Docker') {
+      steps {
+        sh '''
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 123456789012.dkr.ecr.$AWS_REGION.amazonaws.com
+          docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker push ${IMAGE_REPO}:${IMAGE_TAG}
+        '''
+      }
+    }
+  }
+}
+```
+
+4. After pushing the image, Terraform-provisioned EC2 (with `use_docker_deploy=true`) will pull and run the image on boot. For rolling updates you can SSH + docker pull/run or add a small script to restart the container.
+
+Notes:
+- Make sure the EC2 instance has network access to the registry. For private ECR, assign an instance profile (IAM role) with permissions: `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` and `ec2:DescribeInstances` as needed, or have Jenkins push to a public registry.
+- Alternatively, have Jenkins SSH into the EC2 instance and run `docker pull` + `docker run` remotely if you prefer not to grant EC2 ECR permissions.
+
+

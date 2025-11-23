@@ -1,0 +1,10 @@
+aws_region = "us-east-1"
+instance_type = "t3.micro"
+key_name = "pavan_goli"
+allowed_ip_cidr = "0.0.0.0/0"
+repo_url = ""
+repo_branch = "main"
+tomcat_version = "9.0.68"
+use_docker_deploy = false
+docker_image_repo = ""
+docker_image_tag = "latest"
