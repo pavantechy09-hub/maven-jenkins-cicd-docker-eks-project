@@ -1,25 +1,23 @@
-# -----------------------------
-# Deployment for regapp
-# -----------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: regapp-deployment
+  name: java-webapp-deploy
   labels:
-    app: regapp
+    app: java-webapp
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: regapp
+      app: java-webapp
   template:
     metadata:
       labels:
-        app: regapp
+        app: java-webapp
     spec:
       containers:
-        - name: regapp
-          image: 242201296943.dkr.ecr.us-east-2.amazonaws.com/demo:2
+        - name: java-webapp
+          # Use your account/region repo; CI will update this to the build tag
+          image: 085089485008.dkr.ecr.us-east-2.amazonaws.com/demo:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -31,19 +29,18 @@ spec:
 
 ---
 
-# -----------------------------
-# LoadBalancer Service
-# -----------------------------
+# LoadBalancer Service for java-webapp
 apiVersion: v1
 kind: Service
 metadata:
-  name: regapp-service
+  name: java-webapp-svc
   labels:
-    app: regapp
+    app: java-webapp
 spec:
   selector:
-    app: regapp
+    app: java-webapp
   ports:
-    - port: 80          # 💡 Make this 80 to expose outside users easily
-      targetPort: 8080  # 🔁 Container port inside the pod
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
   type: LoadBalancer

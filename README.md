@@ -1,3 +1,127 @@
+# Java CI/CD: Jenkins → Docker → ECR → EKS
+
+This repository contains a sample Java web application and infrastructure/pipeline artifacts used to demonstrate a CI/CD flow: Jenkins builds the app with Maven, produces a Docker image, pushes it to Amazon ECR, and the image is deployed to Amazon EKS.
+
+What I changed/added
+- `Jenkinsfile` — declarative pipeline that builds, tags (BUILD_NUMBER + latest), pushes to ECR and updates the Kubernetes manifest in `Kubernetes-Manifests-file`.
+- `Kubernetes-Manifests-file/deploy_svc.yml` — updated to reference this AWS account's ECR repo and to use `java-webapp` naming (matches deployed resources).
+
+Quick links
+- Kubernetes manifest: `Kubernetes-Manifests-file/deploy_svc.yml`
+- Jenkins pipeline: `Jenkinsfile`
+
+How to use (summary)
+1. Ensure Jenkins has a job using the `Jenkinsfile` from this repo (Pipeline: Pipeline script from SCM or multibranch pipeline).
+2. In Jenkins, add a secret-text credential with id `my-git-pattoken` that has push access to this repo so the pipeline can commit manifest updates.
+3. Make sure the EC2/Jenkins instance has the correct IAM permissions (or add AWS credentials in Jenkins) to push to ECR.
+4. The Jenkinsfile tags images as `${BUILD_NUMBER}` and also as `latest`. The manifest in the repo will be updated to reference the build tag.
+
+Advanced / production-ready notes
+-------------------------------
+- Dockerfile and runtime: this repository supports a Chainguard minimal Java runtime via the `RUNTIME_IMAGE` build-arg. The Dockerfile is multi-stage and will work with `images.chainguard.dev/java:17` by default. To build locally using Chainguard:
+
+```bash
+docker build --build-arg RUNTIME_IMAGE=images.chainguard.dev/java:17 -t java-webapp:latest .
+```
+
+- Jenkinsfile environment: For safety the `Jenkinsfile` no longer hardcodes the AWS account id. Configure one of these in Jenkins:
+  - set `REPOSITORY_URI` as a job/global environment variable (preferred), or
+  - set `AWS_ACCOUNT_ID` and `AWS_DEFAULT_REGION` so the pipeline can derive the repo URI.
+
+- Add Maven Wrapper: generate locally with `mvn -N io.takari:maven:wrapper` and commit `mvnw`, `mvnw.cmd` and `.mvn/wrapper` to the repo for reproducible builds.
+
+- Secrets & credentials: never commit secrets. Use Jenkins Credentials for:
+  - Git token (credential id `my-git-pattoken` used in the Jenkinsfile), and
+  - AWS credentials or rely on the EC2 instance profile to authenticate to ECR.
+
+## Validation — screenshots
+
+Add screenshots to `docs/screenshots/` to show proof of a successful run. Recommended filenames (place your PNGs there):
+
+- `jenkins_console.png` — Jenkins job console output (build, docker push, git commit)
+- `ecr_tags.png` — ECR repository view showing tags (BUILD_NUMBER + latest)
+- `kubectl_svc.png` — output of `kubectl get svc` showing the LoadBalancer hostname
+- `app_page.png` — the webapp page served from the LoadBalancer
+
+Embed examples (will render on GitHub once the files exist):
+
+![Jenkins console](docs/screenshots/jenkins_console.png)
+![ECR tags](docs/screenshots/ecr_tags.png)
+![kubectl svc](docs/screenshots/kubectl_svc.png)
+![App page](docs/screenshots/app_page.png)
+
+To add and commit these screenshots from your workstation:
+
+```bash
+git checkout -b feature/practice
+mkdir -p docs/screenshots
+# copy your PNGs into docs/screenshots/
+git add docs/screenshots/*.png README.md
+git commit -m "docs: add validation screenshots"
+git push origin feature/practice
+```
+
+After pushing, open a Pull Request from `feature/practice` → `main` to publish the images on GitHub.
+
+
+Accessing the running app
+- After deployment, check the service external hostname (type LoadBalancer) in the cluster. Example from my run:
+
+```
+http://a29b4958d91b647e79d14f28ae8ee1f9-2127306800.us-east-2.elb.amazonaws.com/
+```
+
+Recommended README screenshots
+- Jenkins job run console output (show build, docker push, and git commit step)
+- ECR repository showing the pushed image/tag
+- kubectl get svc output showing the LoadBalancer hostname
+- Application page served from the LoadBalancer (tomcat/webapp page)
+
+How to push these repo changes to GitHub
+1. From your workstation, run:
+
+```bash
+git checkout -b feature/practice
+git add Jenkinsfile Kubernetes-Manifests-file/deploy_svc.yml README.md
+git commit -m "Add Jenkinsfile, update manifest and README for CI/CD"
+git push origin feature/practice
+```
+
+2. Create a Pull Request on GitHub from `feature/practice` → `main` and merge it. Alternatively:
+
+```bash
+# merge locally (if you have permissions)
+git checkout main
+git pull origin main
+git merge --no-ff feature/practice
+git push origin main
+```
+
+Cleaning up AWS resources (to avoid charges)
+- EKS cluster (deletes worker nodes, load balancers, etc.):
+  ```bash
+  eksctl delete cluster --name devops-cluster --region us-east-2
+  ```
+- Destroy Terraform-managed EC2 (if you used the terraform in `terraform/`):
+  ```bash
+  cd terraform
+  terraform destroy -var-file=environments/dev.tfvars
+  ```
+- Remove ECR repository (optional):
+  ```bash
+  aws ecr delete-repository --repository-name demo --region us-east-2 --force
+  ```
+
+Notes & security
+- Do not commit credentials or PEM keys to the repository. Use Jenkins credentials store or IAM instance profiles.
+- Consider adding a Maven Wrapper (`mvnw`) to the project for reproducible builds.
+- For automation and safer deployment, consider adding ArgoCD to perform GitOps (it will keep the cluster in sync with the repo manifest).
+
+If you want I can:
+- push these local edits to `feature/practice` (I will prepare the git commands and you can run them), or
+- attempt to push from the jumphost (requires a git token/credential configured on that host).
+
+Questions? Tell me whether you want me to prepare the PR or to run the destroy commands for you now (I can run `eksctl delete cluster` and `terraform destroy` if you confirm you want to tear down everything). 
 # 🚀 Jenkins CI/CD + Docker for Java Web App 
 
 

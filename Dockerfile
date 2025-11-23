@@ -1,3 +1,47 @@
+# Multi-stage build: Maven builder -> minimal runtime
+# Default runtime is a Chainguard Java runtime. To build with a different runtime,
+# set --build-arg RUNTIME_IMAGE=your/runtime:tag
+
+##############################
+# Stage: builder (build WAR and fetch Tomcat)
+##############################
+FROM maven:3.8.6-eclipse-temurin-11 AS builder
+
+WORKDIR /src
+COPY pom.xml ./
+COPY . ./
+
+# Build the project (produces webapp/target/webapp.war)
+RUN mvn -B -DskipTests clean package
+
+# Download Apache Tomcat so we can bundle a minimal Tomcat distribution
+ARG TOMCAT_VERSION=9.0.95
+RUN set -eux; \
+    mkdir -p /tmp/tomcat; \
+    curl -fsSL "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" -o /tmp/tomcat.tar.gz; \
+    tar -xzf /tmp/tomcat.tar.gz -C /tmp/tomcat --strip-components=1; \
+    rm /tmp/tomcat.tar.gz
+
+##############################
+# Stage: runtime (minimal, Chainguard-friendly)
+##############################
+# Use a Chainguard Java runtime by default; consumers can override with --build-arg
+ARG RUNTIME_IMAGE=images.chainguard.dev/java:17
+FROM ${RUNTIME_IMAGE} AS runtime
+
+# Create Tomcat directory and copy extracted Tomcat from builder
+COPY --from=builder /tmp/tomcat /opt/tomcat
+
+# Copy the built WAR into Tomcat webapps as ROOT.war
+COPY --from=builder /src/webapp/target/webapp.war /opt/tomcat/webapps/ROOT.war
+
+WORKDIR /opt/tomcat
+
+# Expose Tomcat port
+EXPOSE 8080
+
+# Start Tomcat by invoking the Bootstrap class directly (works with minimal runtimes)
+ENTRYPOINT ["java", "-cp", "/opt/tomcat/bin/bootstrap.jar:/opt/tomcat/bin/tomcat-juli.jar", "org.apache.catalina.startup.Bootstrap", "start"]
 #------------------------with tomcat image mavne need to be install and run goal before-------------
 # we need to install mavne and run goal make it ready war file 
 # FROM tomcat:latest
