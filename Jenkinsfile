@@ -10,8 +10,11 @@ pipeline {
         // REPOSITORY_URI can be provided directly or derived from AWS_ACCOUNT_ID
         REPOSITORY_URI = ''
         GIT_REPO_NAME = "maven-jenkins-cicd-docker-eks-project"
-        GIT_EMAIL = "pavantechy09@gmail.com"
-        GIT_USER_NAME = "pavantechy-hub"
+        # Provide the repo URL (https://github.com/your-org/your-repo.git) in the job environment
+        GIT_REPO_URL = ''
+        # Configure Git committer identity via environment variables or Jenkins credentials
+        GIT_EMAIL = ''
+        GIT_USER_NAME = ''
         YAML_FILE = "deploy_svc.yml"
     }
 
@@ -41,7 +44,12 @@ pipeline {
         stage('Checkout') {
             steps {
                 // adjust branch in job configuration if needed
-                git branch: 'master', url: 'https://github.com/pavantechy09/maven-jenkins-cicd-docker-eks-project.git'
+                script {
+                    if (!env.GIT_REPO_URL?.trim()) {
+                        error("GIT_REPO_URL must be provided in the job environment (e.g. https://github.com/your-org/your-repo.git)")
+                    }
+                    git branch: 'master', url: env.GIT_REPO_URL
+                }
             }
         }
 
@@ -79,12 +87,14 @@ pipeline {
                 dir('Kubernetes-Manifests-file') {
                     withCredentials([string(credentialsId: 'my-git-pattoken', variable: 'git_token')]) {
                         sh '''
-                            git config user.email "${GIT_EMAIL}"
-                            git config user.name "${GIT_USER_NAME}"
+                            if (env.GIT_EMAIL?.trim()) { git config user.email "${GIT_EMAIL}" }
+                            if (env.GIT_USER_NAME?.trim()) { git config user.name "${GIT_USER_NAME}" }
                             sed -i "s#image:.*#image: ${REPOSITORY_URI}/${AWS_ECR_REPO_NAME}:${BUILD_NUMBER}#g" ${YAML_FILE}
                             git add ${YAML_FILE}
                             git commit -m "Update ${AWS_ECR_REPO_NAME} image to ${BUILD_NUMBER}" || true
-                            git push https://${git_token}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:master || true
+                            # push using the provided repo URL and token
+                            repo_no_proto=$(echo ${GIT_REPO_URL} | sed -e 's#https://##' -e 's#http://##')
+                            git push https://${git_token}@${repo_no_proto} HEAD:master || true
                         '''
                     }
                 }
