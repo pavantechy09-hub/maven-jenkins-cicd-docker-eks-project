@@ -1,0 +1,34 @@
+name: Commit message policy (Conventional Commits)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install commitlint
+        run: |
+          npm init -y
+          npm install --no-save @commitlint/config-conventional @commitlint/cli
+
+      - name: Run commitlint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Compute commits in the PR (from base..HEAD)
+          BASE_REF=${{ github.event.pull_request.base.sha }}
+          HEAD_REF=${{ github.event.pull_request.head.sha }}
+          echo "Checking commits from $BASE_REF..$HEAD_REF"
+          npx commitlint --from $BASE_REF --to $HEAD_REF --verbose

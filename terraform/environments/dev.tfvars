@@ -1,6 +1,6 @@
 aws_region = "us-east-1"
 instance_type = "t3.micro"
-key_name = "pavan_goli"
+key_name = "your-key-name"
 allowed_ip_cidr = "0.0.0.0/0"
 repo_url = ""
 repo_branch = "main"

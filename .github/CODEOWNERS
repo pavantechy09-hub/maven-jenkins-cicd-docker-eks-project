@@ -1,0 +1,11 @@
+# Code owners file - defines who is responsible for code in the repo.
+# Add usernames or teams that should be requested for review on changes.
+# To enforce CODEOWNERS as required reviewers, enable "Require review from Code Owners"
+# in the repository Branch protection rules for `main`.
+
+# Make the repo owner the default code owner
+* @pavantechy09-hub
+
+# Optionally, you can add path-specific owners:
+# /terraform/ @pavantechy09-hub
+# /Jenkinsfile @pavantechy09-hub
